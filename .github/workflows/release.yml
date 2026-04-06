@@ -3,13 +3,13 @@ name: VCC Release Automation
 on:
   push:
     tags:
-      - "v*" # Startet bei v1.0.2, v1.1.0 etc.
+      - "v*" # Startet z.B. bei v1.0.3
 
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Garantiert Rechte für Releases und Code-Pushes
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -19,45 +19,43 @@ jobs:
       - name: Extract Metadata
         id: metadata
         run: |
-          VERSION=$(jq -r .version package.json)
-          PKG_NAME=$(jq -r .name package.json)
-          DISPLAY_NAME=$(jq -r .displayName package.json)
-          DESCRIPTION=$(jq -r .description package.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "pkg_name=$PKG_NAME" >> $GITHUB_OUTPUT
-          echo "display_name=$DISPLAY_NAME" >> $GITHUB_OUTPUT
-          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+          echo "version=$(jq -r .version package.json)" >> $GITHUB_OUTPUT
+          echo "pkg_name=$(jq -r .name package.json)" >> $GITHUB_OUTPUT
+          echo "display_name=$(jq -r .displayName package.json)" >> $GITHUB_OUTPUT
+          echo "description=$(jq -r .description package.json)" >> $GITHUB_OUTPUT
 
       - name: Create VCC Package Zip
         run: |
-          # Wir packen nur die relevanten Dateien ohne den Repo-Hauptordner
           zip -r ${{ steps.metadata.outputs.pkg_name }}-${{ github.ref_name }}.zip package.json README.md Editor/ Editor.meta package.json.meta README.md.meta
 
       - name: Upload GitHub Release Asset
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.metadata.outputs.pkg_name }}-${{ github.ref_name }}.zip
-          generate_release_notes: true
-          draft: false
-          prerelease: false
 
       - name: Update VCC Index
         run: |
-          # Wechsel zum gh-pages Branch (oder erstelle ihn, falls er fehlt)
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          git fetch origin gh-pages || git checkout --orphan gh-pages
-          git checkout gh-pages || git checkout -b gh-pages
-
-          # Falls die index.json noch nicht existiert, Basis-Struktur anlegen
-          if [ ! -f index.json ]; then
-            echo '{"name":"mrunknownde VCC Repo","id":"de.mrunknownde.vccrepo","url":"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/index.json","author":"mrunknownde","packages":{}}' > index.json
+          # Prüfen, ob der gh-pages Branch auf dem Server existiert
+          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            git checkout gh-pages
+          else
+            # Wenn nicht: Erstelle ihn als komplett leeren (orphan) Branch
+            git checkout --orphan gh-pages
+            git rm -rf . # Löscht alle Main-Dateien aus diesem Branch
           fi
 
-          # Neue Version in die index.json injizieren
+          # Basis-Struktur der index.json erstellen, falls sie noch nicht existiert
+          if [ ! -f index.json ]; then
+            echo '{"name":"mrunknownde VCC Tools","id":"de.mrunknownde.vccrepo","url":"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/index.json","author":"mrunknownde","packages":{}}' > index.json
+          fi
+
+          # URL zur gerade hochgeladenen ZIP-Datei im Release generieren
           ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.metadata.outputs.pkg_name }}-${{ github.ref_name }}.zip"
           
+          # Neue Version per jq sauber in die index.json injizieren
           jq --arg ver "${{ steps.metadata.outputs.version }}" \
              --arg name "${{ steps.metadata.outputs.pkg_name }}" \
              --arg disp "${{ steps.metadata.outputs.display_name }}" \
@@ -72,6 +70,13 @@ jobs:
                 "url": $url
              }' index.json > temp.json && mv temp.json index.json
 
+          # Änderungen stagen
           git add index.json
-          git commit -m "Add version ${{ github.ref_name }} to VCC index"
-          git push origin gh-pages
+          
+          # Nur committen und pushen, wenn sich die JSON wirklich verändert hat (verhindert Action-Crash)
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-update VCC index.json for ${{ github.ref_name }}"
+            git push origin gh-pages
+          else
+            echo "Keine Änderungen an der index.json festgestellt. Überspringe Push."
+          fi
