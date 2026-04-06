@@ -2,7 +2,7 @@
   "name": "MrUnknownDE's VCC Tools",
   "id": "de.mrunknownde.vcc-tools",
   "url": "https://vcc.mrunk.de/index.json",
-  "author": "mrunknownde",
+  "author": "MrUnknownDE",
   "packages": {
     "de.mrunknownde.vcc-tools": {
       "versions": {
