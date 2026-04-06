@@ -2,7 +2,7 @@
   "name": "MrUnknownDE's VCC Tools",
   "id": "de.mrunknownde.vcc-tools",
   "url": "https://vcc.mrunk.de/index.json",
-  "author": "mrunknownde",
+  "author": "MrUnknownDE",
   "packages": {
     "de.mrunknownde.vcc-tools": {
       "versions": {
@@ -19,22 +19,6 @@
           "version": "1.0.2",
           "displayName": "MrUnknownDE's VRChat Tools",
           "url": "https://github.com/MrUnknownDE/vcc-tools/archive/refs/tags/v1.0.2.zip",
-          "unity": "2022.3",
-          "description": "A lightweight, integrated Git panel for Unity."
-        },
-        "1.0.1": {
-          "name": "de.mrunknownde.vcc-tools",
-          "version": "1.0.1",
-          "displayName": "MrUnknownDE'sVRChat Tools",
-          "url": "https://github.com/MrUnknownDE/vcc-tools/archive/refs/tags/v1.0.1.zip",
-          "unity": "2022.3",
-          "description": "A lightweight, integrated Git panel for Unity."
-        },
-        "1.0.0": {
-          "name": "de.mrunknownde.vcc-tools",
-          "version": "1.0.0",
-          "displayName": "MrUnknownDE's VRChat Tools",
-          "url": "https://github.com/MrUnknownDE/vcc-tools/archive/refs/tags/v1.0.0.zip",
           "unity": "2022.3",
           "description": "A lightweight, integrated Git panel for Unity."
         }
