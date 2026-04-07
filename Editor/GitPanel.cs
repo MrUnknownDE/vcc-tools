@@ -64,6 +64,7 @@ public class GitPanel : EditorWindow
         
         if (hasRepo) 
         {
+            ExportPackageInventory();
             currentBranchName = RunGitCommand("rev-parse --abbrev-ref HEAD").Trim();
             FetchBranches();
         }
@@ -147,6 +148,13 @@ public class GitPanel : EditorWindow
             if (EditorGUI.EndChangeCheck())
             {
                 EditorPrefs.SetString(prefsKey, webUrlOverride.Trim());
+            }
+
+            GUILayout.Space(10);
+            GUILayout.Label("Inventory Management", EditorStyles.miniBoldLabel);
+            if (GUILayout.Button("📄 Sync Package Inventory (Unity & VRChat)", GUILayout.Height(25)))
+            {
+                ExportPackageInventory();
             }
             EditorGUILayout.EndVertical();
             GUILayout.Space(5);
@@ -409,6 +417,124 @@ public class GitPanel : EditorWindow
         string path = Path.Combine(Application.dataPath, "../.gitignore");
         if (!File.Exists(path)) File.WriteAllText(path, ".idea\n.vs\nbin\nobj\n/Library\n/Temp\n/UserSettings\n/Configs\n/*.csproj\n/*.sln\n/Logs\n/Packages/*\n!/Packages/manifest.json\n!/Packages/packages-lock.json\n~UnityDirMonSyncFile~*");
     }
+
+    private void ExportPackageInventory() 
+        {
+            string rootPath = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string outputPath = Path.Combine(rootPath, "PACKAGES.md");
+            
+            string unityManifest = Path.Combine(rootPath, "Packages", "manifest.json");
+            string vpmManifest = Path.Combine(rootPath, "Packages", "vpm-manifest.json");
+
+            List<string> mdLines = new List<string>();
+            mdLines.Add("# 📦 Project Dependencies Inventory");
+            mdLines.Add($"\n*Last Update: {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}*");
+            mdLines.Add("\n> [!TIP]\n> This list helps to restore the workspace if the Creator Companion or Unity fails to auto-resolve dependencies.\n");
+
+            int totalFound = 0;
+
+            totalFound += ParseManifest(unityManifest, "Unity Standard & Scoped Dependencies", mdLines);
+            totalFound += ParseManifest(vpmManifest, "VRChat Package Manager (VPM) Dependencies", mdLines);
+
+            try {
+                File.WriteAllLines(outputPath, mdLines, System.Text.Encoding.UTF8);
+                RunGitCommand($"add \"{outputPath}\"");
+                UnityEngine.Debug.Log($"Git-Tool: PACKAGES.md aktualisiert. {totalFound} Einträge gefunden.");
+            } catch (System.Exception e) {
+                UnityEngine.Debug.LogError("Git-Tool: Fehler beim Schreiben der PACKAGES.md: " + e.Message);
+            }
+        }
+
+        private int ParseManifest(string path, string sectionTitle, List<string> outputList)
+        {
+            if (!File.Exists(path)) return 0;
+
+            int count = 0;
+            try {
+                string content = File.ReadAllText(path);
+                
+                // 1. Finde den Start des "dependencies" Blocks
+                int startIndex = content.IndexOf("\"dependencies\"");
+                if (startIndex == -1) return 0; 
+                
+                // Finde die erste öffnende Klammer nach dem Wort
+                startIndex = content.IndexOf("{", startIndex);
+                if (startIndex == -1) return 0;
+
+                // 2. Extrahiere exakt diesen Block, indem wir Klammern zählen
+                int openBraces = 0;
+                int endIndex = startIndex;
+                for (int i = startIndex; i < content.Length; i++) {
+                    if (content[i] == '{') openBraces++;
+                    if (content[i] == '}') {
+                        openBraces--;
+                        // Sobald wir wieder bei 0 sind, ist der Dependencies-Block geschlossen
+                        if (openBraces == 0) {
+                            endIndex = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (endIndex <= startIndex) return 0;
+
+                // Header nur zeichnen, wenn wir wirklich einen Block haben
+                outputList.Add($"## {sectionTitle}");
+                outputList.Add("| Package Name | Version / Source |");
+                outputList.Add("| :--- | :--- |");
+
+                // Den isolierten Block herauslösen und in Zeilen splitten
+                string dependenciesBlock = content.Substring(startIndex, endIndex - startIndex + 1);
+                string[] blockLines = dependenciesBlock.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries);
+                
+                string currentVpmPackage = "";
+
+                // 3. Den sauberen Block auswerten
+                foreach (string line in blockLines) {
+                    string trimmed = line.Trim();
+                    
+                    // Einzelne Klammern können wir ignorieren, da wir eh schon im richtigen Block sind
+                    if (trimmed == "{" || trimmed == "}" || trimmed == "},") continue;
+
+                    if (trimmed.StartsWith("\"")) {
+                        string[] parts = trimmed.Split(new char[] { ':' }, 2);
+                        if (parts.Length == 2) {
+                            string key = parts[0].Replace("\"", "").Trim();
+                            string rawValue = parts[1].Trim();
+
+                            if (rawValue.StartsWith("{")) {
+                                // VPM Paket Start (z.B. "com.vrchat.base": { )
+                                currentVpmPackage = key;
+                            } 
+                            else if (key == "version") {
+                                // VPM Paket Version (z.B. "version": "3.10.2")
+                                string val = rawValue.Replace("\"", "").Replace(",", "").Trim();
+                                if (!string.IsNullOrEmpty(currentVpmPackage)) {
+                                    outputList.Add($"| `{currentVpmPackage}` | {val} |");
+                                    count++;
+                                    currentVpmPackage = "";
+                                }
+                            }
+                            else if (!rawValue.StartsWith("{")) {
+                                // Unity Flat Paket (z.B. "com.unity.timeline": "1.2.3")
+                                string val = rawValue.Replace("\"", "").Replace(",", "").Trim();
+                                outputList.Add($"| `{key}` | {val} |");
+                                count++;
+                            }
+                        }
+                    }
+                }
+            } catch (System.Exception e) { 
+                UnityEngine.Debug.LogWarning($"Git-Tool: Warnung beim Lesen von {Path.GetFileName(path)}: {e.Message}"); 
+            }
+
+            if (count == 0) {
+                outputList.Add("| - | No entries found |");
+            }
+            
+            outputList.Add(""); // Leerzeile für sauberes Markdown
+            return count;
+        }
 
     // FIX: Methode ist wieder static!
     public static string RunGitCommand(string args, bool logAction = false) {
