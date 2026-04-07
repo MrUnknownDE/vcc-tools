@@ -25,6 +25,21 @@ Let your community know what you are working on without saying a word.
 
 ---
 
+## ⚖️ ⚠️ Achtung: Law & Order (The German Way)
+
+Now it's getting serious—or as we say in Germany: **"Jetzt wird es deutsch!"** 🇩🇪
+
+### The "Assets Folder" Rule
+Listen up, because the German Copyright Law (*Urheberrechtsgesetz*) doesn't take jokes lightly. 
+
+**DO NOT upload your paid Assets, Store-bought Plugins, or copyrighted Prefabs into a PUBLIC Repository.** If you distribute copyrighted material from creators without permission:
+- **Civil Law:** You could face fines (Schadensersatz) that will make your bank account cry.
+- **Criminal Law:** According to § 106 UrhG, unauthorized exploitation of copyrighted works can lead to **up to 3 years in prison** or heavy fines.
+
+**Pro-Tip:** Always use a **Private Repository** (e.g., on a private Gitea server or a private GitHub repo) if your project contains paid assets. Your wallet and your freedom will thank you. Don't let the "Abmahnanwalt" be your first beta tester ;) 
+
+---
+
 ## 🚀 Installation
 
 This tool is installed manually directly into your Unity project.
