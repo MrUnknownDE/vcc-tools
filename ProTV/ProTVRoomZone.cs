@@ -63,7 +63,6 @@ public class ProTVRoomZone : UdonSharpBehaviour
         }
         else
         {
-            // Update Saved Volumes bevor wir beim Spawn abschalten
             UpdateSavedVolumes();
             
             if (localVideoPlayer != null) localVideoPlayer.SetActive(false);
@@ -74,10 +73,7 @@ public class ProTVRoomZone : UdonSharpBehaviour
     public override void OnPlayerTriggerEnter(VRCPlayerApi player)
     {
         if (!Utilities.IsValid(player) || !player.isLocal) return;
-
         if (localVideoPlayer != null) localVideoPlayer.SetActive(true);
-        
-        // Starte Fade In von 0
         fadeProgress = 0f;
         fadeState = 1; 
     }
@@ -85,10 +81,7 @@ public class ProTVRoomZone : UdonSharpBehaviour
     public override void OnPlayerTriggerExit(VRCPlayerApi player)
     {
         if (!Utilities.IsValid(player) || !player.isLocal) return;
-
-        // GANZ WICHTIG: Echte Lautstärke sichern, BEVOR wir faden
         UpdateSavedVolumes();
-
         fadeProgress = 1f;
         fadeState = -1; // Starte Fade Out
     }
@@ -96,7 +89,6 @@ public class ProTVRoomZone : UdonSharpBehaviour
     void Update()
     {
         if (fadeState == 0) return;
-
         if (fadeState == 1) // FADE IN
         {
             fadeProgress += Time.deltaTime / fadeDuration;
@@ -110,15 +102,12 @@ public class ProTVRoomZone : UdonSharpBehaviour
         else if (fadeState == -1) // FADE OUT
         {
             fadeProgress -= Time.deltaTime / fadeDuration;
-            
             if (fadeProgress <= 0f)
             {
                 fadeProgress = 0f;
                 fadeState = 0; 
                 
                 // DER PRO-TV FIX:
-                // Wir zwingen die Original-Lautstärke in exakt diesem Frame zurück,
-                // direkt bevor wir das Objekt deaktivieren. ProTV speichert so den echten Wert!
                 RestoreOriginalVolume();
 
                 if (localVideoPlayer != null) localVideoPlayer.SetActive(false);
@@ -130,15 +119,11 @@ public class ProTVRoomZone : UdonSharpBehaviour
         }
     }
 
-    // --- Hilfsfunktionen für saubereren Code ---
-
     private void UpdateSavedVolumes()
     {
         if (audioSources == null) return;
         for (int i = 0; i < audioSources.Length; i++)
         {
-            // Wir aktualisieren die gespeicherte Lautstärke nur, 
-            // wenn sie gerade nicht auf 0 runtergefadet ist.
             if (audioSources[i] != null && audioSources[i].volume > 0.05f) 
             {
                 savedVolumes[i] = audioSources[i].volume;
