@@ -36,7 +36,10 @@ public class GitPanel : EditorWindow
     private string prefsKey = "";
 
     private double lastRefreshTime = -999;
-    
+
+    private bool isLoading = false;
+    private string loadingMessage = "";
+
     private struct CommitInfo { public string hash; public string date; public string message; }
     private List<CommitInfo> commitHistory = new List<CommitInfo>();
 
@@ -47,11 +50,41 @@ public class GitPanel : EditorWindow
         window.minSize = new Vector2(380, 650); 
     }
 
-    private void OnEnable() 
-    { 
+    private void OnEnable()
+    {
+        EditorApplication.update += OnEditorUpdate;
         prefsKey = $"GitTool_WebUrl_{Application.dataPath.GetHashCode()}";
         webUrlOverride = EditorPrefs.GetString(prefsKey, "");
-        RefreshData(); 
+        RefreshData();
+    }
+
+    private void OnDisable()
+    {
+        EditorApplication.update -= OnEditorUpdate;
+    }
+
+    private void OnEditorUpdate()
+    {
+        if (isLoading) Repaint();
+    }
+
+    private void RunNetworkCommand(string message, System.Func<string> work, System.Action<string> onDone)
+    {
+        if (isLoading) return;
+        isLoading = true;
+        loadingMessage = message;
+        Repaint();
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            string result = work();
+            EditorApplication.delayCall += () =>
+            {
+                isLoading = false;
+                loadingMessage = "";
+                onDone(result);
+                Repaint();
+            };
+        });
     }
     
     private void OnFocus()
@@ -123,6 +156,21 @@ public class GitPanel : EditorWindow
 
     private void OnGUI()
     {
+        if (isLoading)
+        {
+            EditorGUI.DrawRect(new Rect(0, 0, position.width, position.height), new Color(0.15f, 0.15f, 0.15f, 1f));
+            string[] frames = { "|", "/", "-", "\\" };
+            string spinner = frames[(int)(EditorApplication.timeSinceStartup * 8) % 4];
+            GUIStyle style = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 13,
+                normal = { textColor = Color.white }
+            };
+            GUI.Label(new Rect(0, position.height / 2 - 20, position.width, 40), $"{spinner}  {loadingMessage}", style);
+            return;
+        }
+
         GUILayout.Space(10);
         GUILayout.Label("GIT Version Control System", EditorStyles.boldLabel);
         if (hasRepo) GUILayout.Label($"Active Branch: {currentBranchName}", EditorStyles.miniLabel);
@@ -242,10 +290,9 @@ public class GitPanel : EditorWindow
 
         EditorGUILayout.BeginHorizontal();
         
-        GUI.backgroundColor = new Color(0.2f, 0.4f, 0.8f); 
+        GUI.backgroundColor = new Color(0.2f, 0.4f, 0.8f);
         if (GUILayout.Button("✓ Push", GUILayout.Height(30)))
         {
-            UnityEngine.Debug.Log("Git-Tool: Saving Scenes and Assets before push...");
             UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
             AssetDatabase.SaveAssets();
 
@@ -254,34 +301,39 @@ public class GitPanel : EditorWindow
             RunGitCommand("add .", true);
             RunGitCommand($"commit -m \"{commitMessage}\"", true);
 
-            string pushResult = RunGitCommand("push -u origin HEAD", true, 60000);
-            if (pushResult.Contains("rejected") || pushResult.Contains("fetch first"))
-            {
-                UnityEngine.Debug.LogError("Git-Tool: PUSH REJECTED! Someone else pushed changes. Please click 'Pull' first.");
-            }
-            else
-            {
-                UnityEngine.Debug.Log("Git-Tool: Changes successfully pushed!");
-                commitMessage = "";
-            }
-            RefreshData();
+            RunNetworkCommand("Pushing to remote...  (a browser window may open for authentication)",
+                () => RunGitCommand("push -u origin HEAD", true, 180000),
+                result =>
+                {
+                    if (result.Contains("rejected") || result.Contains("fetch first"))
+                        UnityEngine.Debug.LogError("Git-Tool: PUSH REJECTED! Someone else pushed changes. Please click 'Pull' first.");
+                    else
+                    {
+                        UnityEngine.Debug.Log("Git-Tool: Changes successfully pushed!");
+                        commitMessage = "";
+                    }
+                    RefreshData();
+                });
         }
 
-        GUI.backgroundColor = new Color(0.8f, 0.6f, 0.2f); 
+        GUI.backgroundColor = new Color(0.8f, 0.6f, 0.2f);
         if (GUILayout.Button("⬇️ Pull", GUILayout.Width(80), GUILayout.Height(30)))
         {
             UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
             AssetDatabase.SaveAssets();
 
-            string pullResult = RunGitCommand("pull", true, 60000);
-            AssetDatabase.Refresh(); 
-
-            if (pullResult.Contains("CONFLICT"))
-            {
-                UnityEngine.Debug.LogError("Git-Tool: MERGE CONFLICT! Please resolve conflicts in your code editor.");
-                EditorUtility.DisplayDialog("Merge Conflict", "There are conflicts with the remote changes.\n\nGit could not merge automatically. Please open the conflicting files in your code editor and resolve them manually.", "OK");
-            }
-            RefreshData();
+            RunNetworkCommand("Pulling from remote...  (a browser window may open for authentication)",
+                () => RunGitCommand("pull", true, 180000),
+                result =>
+                {
+                    AssetDatabase.Refresh();
+                    if (result.Contains("CONFLICT"))
+                    {
+                        UnityEngine.Debug.LogError("Git-Tool: MERGE CONFLICT! Please resolve conflicts in your code editor.");
+                        EditorUtility.DisplayDialog("Merge Conflict", "There are conflicts with the remote changes.\n\nGit could not merge automatically. Please open the conflicting files in your code editor and resolve them manually.", "OK");
+                    }
+                    RefreshData();
+                });
         }
 
         GUI.backgroundColor = new Color(0.8f, 0.3f, 0.3f); 
@@ -551,9 +603,8 @@ public class GitPanel : EditorWindow
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            // Prevent Git from waiting for credential/SSH prompts that can never appear
+            // Block stdin credential prompts (no TTY in Unity), but allow GCM browser/GUI auth
             si.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
-            si.EnvironmentVariables["GCM_INTERACTIVE"] = "never";
             si.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=15";
 
             var stdout = new System.Text.StringBuilder();
