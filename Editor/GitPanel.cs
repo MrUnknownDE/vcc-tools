@@ -293,16 +293,20 @@ public class GitPanel : EditorWindow
         GUI.backgroundColor = new Color(0.2f, 0.4f, 0.8f);
         if (GUILayout.Button("✓ Push", GUILayout.Height(30)))
         {
+            // Unity APIs must stay on the main thread
             UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
             AssetDatabase.SaveAssets();
-
             if (string.IsNullOrWhiteSpace(commitMessage)) SetDefaultCommitMessage();
-            ExportPackageInventory();
-            RunGitCommand("add .", true);
-            RunGitCommand($"commit -m \"{commitMessage}\"", true);
+            string msgSnapshot = commitMessage;
 
-            RunNetworkCommand("Pushing to remote...  (a browser window may open for authentication)",
-                () => RunGitCommand("push -u origin HEAD", true, 180000),
+            RunNetworkCommand("Committing and pushing...  (a browser window may open for authentication)",
+                () =>
+                {
+                    ExportPackageInventory();
+                    RunGitCommand("add .", true);
+                    RunGitCommand($"commit -m \"{msgSnapshot}\"", true);
+                    return RunGitCommand("push -u origin HEAD", true, 180000);
+                },
                 result =>
                 {
                     if (result.Contains("rejected") || result.Contains("fetch first"))
@@ -603,8 +607,9 @@ public class GitPanel : EditorWindow
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            // Block stdin credential prompts (no TTY in Unity), but allow GCM browser/GUI auth
+            // Block stdin prompts (no TTY in Unity), but force GCM to use browser/GUI auth
             si.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+            si.EnvironmentVariables["GCM_INTERACTIVE"] = "always";
             si.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=15";
 
             var stdout = new System.Text.StringBuilder();
