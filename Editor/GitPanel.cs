@@ -34,6 +34,8 @@ public class GitPanel : EditorWindow
     private bool showSettings = false;
     private string webUrlOverride = "";
     private string prefsKey = "";
+
+    private double lastRefreshTime = -999;
     
     private struct CommitInfo { public string hash; public string date; public string message; }
     private List<CommitInfo> commitHistory = new List<CommitInfo>();
@@ -52,19 +54,24 @@ public class GitPanel : EditorWindow
         RefreshData(); 
     }
     
-    private void OnFocus() { RefreshData(); }
+    private void OnFocus()
+    {
+        if (EditorApplication.timeSinceStartup - lastRefreshTime > 2.0)
+            RefreshData();
+    }
 
     public void RefreshData()
     {
+        lastRefreshTime = EditorApplication.timeSinceStartup;
+
         CheckGitInstallation();
-        CheckUnitySettings(); 
+        CheckUnitySettings();
 
         if (!isGitInstalled) return;
         CheckRepoStatus();
-        
-        if (hasRepo) 
+
+        if (hasRepo)
         {
-            ExportPackageInventory();
             currentBranchName = RunGitCommand("rev-parse --abbrev-ref HEAD").Trim();
             FetchBranches();
         }
@@ -138,7 +145,7 @@ public class GitPanel : EditorWindow
         if (!isGitInstalled) { RenderGitMissingUI(); return; }
         if (!hasRepo) { RenderInitUI(); return; }
 
-        showSettings = EditorGUILayout.Foldout(showSettings, "⚙️ Repository Settings");
+        showSettings = EditorGUILayout.Foldout(showSettings, "Repository Settings");
         if (showSettings)
         {
             EditorGUILayout.BeginVertical("box");
@@ -152,7 +159,7 @@ public class GitPanel : EditorWindow
 
             GUILayout.Space(10);
             GUILayout.Label("Inventory Management", EditorStyles.miniBoldLabel);
-            if (GUILayout.Button("📄 Sync Package Inventory (Unity & VRChat)", GUILayout.Height(25)))
+            if (GUILayout.Button("Sync Package Inventory (Unity & VRChat)", GUILayout.Height(25)))
             {
                 ExportPackageInventory();
             }
@@ -243,20 +250,20 @@ public class GitPanel : EditorWindow
             AssetDatabase.SaveAssets();
 
             if (string.IsNullOrWhiteSpace(commitMessage)) SetDefaultCommitMessage();
+            ExportPackageInventory();
             RunGitCommand("add .", true);
             RunGitCommand($"commit -m \"{commitMessage}\"", true);
-            
-            string pushResult = RunGitCommand("push -u origin HEAD", true);
+
+            string pushResult = RunGitCommand("push -u origin HEAD", true, 60000);
             if (pushResult.Contains("rejected") || pushResult.Contains("fetch first"))
             {
-                UnityEngine.Debug.LogError("Git-Tool: PUSH REJECTED! Jemand anderes hat Änderungen hochgeladen. Bitte klicke zuerst auf 'Pull'.");
+                UnityEngine.Debug.LogError("Git-Tool: PUSH REJECTED! Someone else pushed changes. Please click 'Pull' first.");
             }
             else
             {
                 UnityEngine.Debug.Log("Git-Tool: Changes successfully pushed!");
-                commitMessage = ""; 
+                commitMessage = "";
             }
-            LiveSyncPanel.BroadcastGitUpdate();
             RefreshData();
         }
 
@@ -266,13 +273,13 @@ public class GitPanel : EditorWindow
             UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
             AssetDatabase.SaveAssets();
 
-            string pullResult = RunGitCommand("pull", true);
+            string pullResult = RunGitCommand("pull", true, 60000);
             AssetDatabase.Refresh(); 
 
             if (pullResult.Contains("CONFLICT"))
             {
-                UnityEngine.Debug.LogError("Git-Tool: MERGE CONFLICT! Bitte in VS Code auflösen!");
-                EditorUtility.DisplayDialog("Merge Conflict", "Es gibt Konflikte mit den Server-Daten!\n\nGit konnte die Änderungen nicht automatisch zusammenführen. Bitte öffne die roten Dateien in deinem Code-Editor und löse den Konflikt manuell auf.", "OK");
+                UnityEngine.Debug.LogError("Git-Tool: MERGE CONFLICT! Please resolve conflicts in your code editor.");
+                EditorUtility.DisplayDialog("Merge Conflict", "There are conflicts with the remote changes.\n\nGit could not merge automatically. Please open the conflicting files in your code editor and resolve them manually.", "OK");
             }
             RefreshData();
         }
@@ -439,9 +446,9 @@ public class GitPanel : EditorWindow
             try {
                 File.WriteAllLines(outputPath, mdLines, System.Text.Encoding.UTF8);
                 RunGitCommand($"add \"{outputPath}\"");
-                UnityEngine.Debug.Log($"Git-Tool: PACKAGES.md aktualisiert. {totalFound} Einträge gefunden.");
+                UnityEngine.Debug.Log($"Git-Tool: PACKAGES.md updated. {totalFound} entries found.");
             } catch (System.Exception e) {
-                UnityEngine.Debug.LogError("Git-Tool: Fehler beim Schreiben der PACKAGES.md: " + e.Message);
+                UnityEngine.Debug.LogError("Git-Tool: Failed to write PACKAGES.md: " + e.Message);
             }
         }
 
@@ -453,22 +460,21 @@ public class GitPanel : EditorWindow
             try {
                 string content = File.ReadAllText(path);
                 
-                // 1. Finde den Start des "dependencies" Blocks
+                // 1. Find the start of the "dependencies" block
                 int startIndex = content.IndexOf("\"dependencies\"");
-                if (startIndex == -1) return 0; 
-                
-                // Finde die erste öffnende Klammer nach dem Wort
+                if (startIndex == -1) return 0;
+
+                // Find the first opening brace after the key
                 startIndex = content.IndexOf("{", startIndex);
                 if (startIndex == -1) return 0;
 
-                // 2. Extrahiere exakt diesen Block, indem wir Klammern zählen
+                // 2. Extract exactly this block by counting braces
                 int openBraces = 0;
                 int endIndex = startIndex;
                 for (int i = startIndex; i < content.Length; i++) {
                     if (content[i] == '{') openBraces++;
                     if (content[i] == '}') {
                         openBraces--;
-                        // Sobald wir wieder bei 0 sind, ist der Dependencies-Block geschlossen
                         if (openBraces == 0) {
                             endIndex = i;
                             break;
@@ -478,22 +484,19 @@ public class GitPanel : EditorWindow
 
                 if (endIndex <= startIndex) return 0;
 
-                // Header nur zeichnen, wenn wir wirklich einen Block haben
                 outputList.Add($"## {sectionTitle}");
                 outputList.Add("| Package Name | Version / Source |");
                 outputList.Add("| :--- | :--- |");
 
-                // Den isolierten Block herauslösen und in Zeilen splitten
+                // 3. Parse the isolated block line by line
                 string dependenciesBlock = content.Substring(startIndex, endIndex - startIndex + 1);
                 string[] blockLines = dependenciesBlock.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries);
-                
+
                 string currentVpmPackage = "";
 
-                // 3. Den sauberen Block auswerten
                 foreach (string line in blockLines) {
                     string trimmed = line.Trim();
-                    
-                    // Einzelne Klammern können wir ignorieren, da wir eh schon im richtigen Block sind
+
                     if (trimmed == "{" || trimmed == "}" || trimmed == "},") continue;
 
                     if (trimmed.StartsWith("\"")) {
@@ -503,11 +506,11 @@ public class GitPanel : EditorWindow
                             string rawValue = parts[1].Trim();
 
                             if (rawValue.StartsWith("{")) {
-                                // VPM Paket Start (z.B. "com.vrchat.base": { )
+                                // VPM package start, e.g. "com.vrchat.base": {
                                 currentVpmPackage = key;
-                            } 
+                            }
                             else if (key == "version") {
-                                // VPM Paket Version (z.B. "version": "3.10.2")
+                                // VPM package version, e.g. "version": "3.10.2"
                                 string val = rawValue.Replace("\"", "").Replace(",", "").Trim();
                                 if (!string.IsNullOrEmpty(currentVpmPackage)) {
                                     outputList.Add($"| `{currentVpmPackage}` | {val} |");
@@ -516,7 +519,7 @@ public class GitPanel : EditorWindow
                                 }
                             }
                             else if (!rawValue.StartsWith("{")) {
-                                // Unity Flat Paket (z.B. "com.unity.timeline": "1.2.3")
+                                // Flat Unity package, e.g. "com.unity.timeline": "1.2.3"
                                 string val = rawValue.Replace("\"", "").Replace(",", "").Trim();
                                 outputList.Add($"| `{key}` | {val} |");
                                 count++;
@@ -524,47 +527,77 @@ public class GitPanel : EditorWindow
                         }
                     }
                 }
-            } catch (System.Exception e) { 
-                UnityEngine.Debug.LogWarning($"Git-Tool: Warnung beim Lesen von {Path.GetFileName(path)}: {e.Message}"); 
+            } catch (System.Exception e) {
+                UnityEngine.Debug.LogWarning($"Git-Tool: Could not read {Path.GetFileName(path)}: {e.Message}");
             }
 
             if (count == 0) {
                 outputList.Add("| - | No entries found |");
             }
-            
-            outputList.Add(""); // Leerzeile für sauberes Markdown
+
+            outputList.Add("");
             return count;
         }
 
-    // FIX: Methode ist wieder static!
-    public static string RunGitCommand(string args, bool logAction = false) {
-        try {
-            ProcessStartInfo si = new ProcessStartInfo("git", args) { 
-                WorkingDirectory = Path.GetFullPath(Path.Combine(Application.dataPath, "..")), 
-                UseShellExecute = false, 
-                RedirectStandardOutput = true, 
-                RedirectStandardError = true, 
-                CreateNoWindow = true 
+    public static string RunGitCommand(string args, bool logAction = false, int timeoutMs = 10000)
+    {
+        try
+        {
+            ProcessStartInfo si = new ProcessStartInfo("git", args)
+            {
+                WorkingDirectory = Path.GetFullPath(Path.Combine(Application.dataPath, "..")),
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
             };
-            
-            using (Process p = Process.Start(si)) { 
-                string o = p.StandardOutput.ReadToEnd(); 
-                string e = p.StandardError.ReadToEnd(); 
-                p.WaitForExit(); 
-                string result = o + (string.IsNullOrWhiteSpace(e) ? "" : "\n" + e);
-                
-                if (logAction) {
-                    string time = System.DateTime.Now.ToString("HH:mm:ss");
-                    string entry = $"[{time}] > git {args}\n";
-                    if (!string.IsNullOrWhiteSpace(result)) entry += result.Trim() + "\n\n";
-                    
-                    gitLogOutput = entry + gitLogOutput; 
-                    if (gitLogOutput.Length > 10000) gitLogOutput = gitLogOutput.Substring(0, 10000); 
+            // Prevent Git from waiting for credential/SSH prompts that can never appear
+            si.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+            si.EnvironmentVariables["GCM_INTERACTIVE"] = "never";
+            si.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=15";
+
+            var stdout = new System.Text.StringBuilder();
+            var stderr = new System.Text.StringBuilder();
+
+            using (Process p = Process.Start(si))
+            {
+                // Async reading prevents the stdout/stderr pipe-buffer deadlock
+                p.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
+                p.ErrorDataReceived  += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                bool finished = p.WaitForExit(timeoutMs);
+                if (!finished)
+                {
+                    p.Kill();
+                    p.WaitForExit();
+                    string timeoutNote = $"[{System.DateTime.Now:HH:mm:ss}] > git {args}\n⚠ TIMEOUT after {timeoutMs / 1000}s\n\n";
+                    UnityEngine.Debug.LogWarning($"Git-Tool: Command timed out ({timeoutMs / 1000}s): git {args}");
+                    if (logAction) gitLogOutput = timeoutNote + gitLogOutput;
+                    return "";
                 }
-                
-                return result; 
+                // Second WaitForExit (no timeout) flushes async output handlers
+                p.WaitForExit();
+
+                string result = stdout.ToString() + (stderr.Length > 0 ? "\n" + stderr : "");
+
+                if (logAction)
+                {
+                    string entry = $"[{System.DateTime.Now:HH:mm:ss}] > git {args}\n";
+                    if (!string.IsNullOrWhiteSpace(result)) entry += result.Trim() + "\n\n";
+                    gitLogOutput = entry + gitLogOutput;
+                    if (gitLogOutput.Length > 10000) gitLogOutput = gitLogOutput.Substring(0, 10000);
+                }
+
+                return result;
             }
-        } catch { return ""; }
+        }
+        catch (System.Exception ex)
+        {
+            UnityEngine.Debug.LogWarning($"Git-Tool: Exception running git {args}: {ex.Message}");
+            return "";
+        }
     }
 }
 
